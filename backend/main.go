@@ -23,9 +23,9 @@ type Download struct {
 	Format      string    `json:"format"`
 	Status      string    `json:"status"`
 	FilePath    string    `json:"file_path"`
+	Duration    float64   `json:"duration"`
 	CreatedAt   time.Time `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Duration    int       `json:"duration,omitempty"`
 }
 
 type DownloadRequest struct {
@@ -34,7 +34,7 @@ type DownloadRequest struct {
 }
 
 var db *sql.DB
-// Database connection 
+
 func main() {
 	// Database connection
 	connStr := "host=localhost port=5432 user=postgres password=root dbname=postgres sslmode=disable"
@@ -122,10 +122,13 @@ func processDownload(id int, url, format string) {
 	outputDir := "downloads"
 	outputTemplate := filepath.Join(outputDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", id))
 
+	// Path to your FFmpeg bin folder
+	ffmpegPath := "C:\\ffmpeg-8.0-essentials_build\\bin" // <- change if your ffmpeg folder is different
+
 	var cmd *exec.Cmd
 	if format == "audio" {
-		// Download audio only
 		cmd = exec.Command("yt-dlp",
+			"--ffmpeg-location", ffmpegPath, // <- ensure yt-dlp finds ffmpeg
 			"-x",
 			"--audio-format", "mp3",
 			"--audio-quality", "0",
@@ -133,8 +136,8 @@ func processDownload(id int, url, format string) {
 			url,
 		)
 	} else {
-		// Download video
 		cmd = exec.Command("yt-dlp",
+			"--ffmpeg-location", ffmpegPath, // <- ensure yt-dlp finds ffmpeg
 			"-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
 			"--merge-output-format", "mp4",
 			"-o", outputTemplate,
@@ -159,7 +162,7 @@ func processDownload(id int, url, format string) {
 	filePath := files[0]
 	fileName := filepath.Base(filePath)
 	// Extract title from filename
-	title := fileName[len(fmt.Sprintf("%d_", id)):len(fileName)-len(filepath.Ext(fileName))]
+	title := fileName[len(fmt.Sprintf("%d_", id)) : len(fileName)-len(filepath.Ext(fileName))]
 
 	now := time.Now()
 	db.Exec(

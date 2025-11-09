@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Music, Video, CheckCircle, AlertCircle, Loader, RefreshCw } from 'lucide-react';
+import {
+  Download,
+  Music,
+  Video,
+  CheckCircle,
+  AlertCircle,
+  Loader,
+  RefreshCw,
+} from 'lucide-react';
 
 const API_URL = 'http://localhost:8080/api';
 
@@ -71,11 +79,29 @@ export default function App() {
   };
 
   const formatDuration = (seconds) => {
-    if (!seconds) return '';
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${minutes}m ${secs}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}m ${secs}s`;
+  };
+
+  const handleDownloadFile = async (id, title, format) => {
+    try {
+      const response = await fetch(`${API_URL}/file/${id}`);
+      if (!response.ok) throw new Error('File not found');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const extension = format === 'audio' ? 'mp3' : 'mp4';
+      a.download = `${title || 'download'}.${extension}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error('Download error:', error);
+      setMessage('Error downloading file: ' + error.message);
+    }
   };
 
   return (
@@ -158,9 +184,13 @@ export default function App() {
             </button>
 
             {message && (
-              <div className={`p-4 rounded-lg ${
-                message.includes('success') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-              }`}>
+              <div
+                className={`p-4 rounded-lg ${
+                  message.includes('success')
+                    ? 'bg-green-50 text-green-700'
+                    : 'bg-red-50 text-red-700'
+                }`}
+              >
                 {message}
               </div>
             )}
@@ -215,16 +245,19 @@ export default function App() {
                     </div>
 
                     {download.status === 'completed' && (
-                      <div className="flex gap-2">
-                        <a
-                          href={`${API_URL}/file/${download.id}`}
-                          download={download.title ? `${download.title}.${download.format === 'audio' ? 'mp3' : 'mp4'}` : undefined}
-                          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm font-medium flex items-center gap-2 whitespace-nowrap"
-                        >
-                          <Download className="w-4 h-4" />
-                          Download
-                        </a>
-                      </div>
+                      <button
+                        onClick={() =>
+                          handleDownloadFile(
+                            download.id,
+                            download.title,
+                            download.format
+                          )
+                        }
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm font-medium flex items-center gap-2 whitespace-nowrap"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download
+                      </button>
                     )}
                   </div>
                 </div>
