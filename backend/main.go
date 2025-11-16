@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -25,6 +26,7 @@ type Download struct {
 	Extension   string     `json:"extension"`
 	Status      string     `json:"status"` // pending, processing, completed, failed
 	Duration    float64    `json:"duration"`
+	Platform    string     `json:"platform"` // youtube, tiktok
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
@@ -50,17 +52,17 @@ var ffmpegPath = "C:\\ffmpeg-8.0-essentials_build\\bin" // Change this to your F
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Request: %s %s", r.Method, r.URL.Path)
-		
+
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Disposition")
-		
+
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -84,23 +86,23 @@ func main() {
 	log.Println("Database migration completed")
 
 	router := mux.NewRouter()
-	
+
 	// Apply CORS middleware
 	router.Use(corsMiddleware)
-	
+
 	// Register routes
 	router.HandleFunc("/api/formats", handleGetFormats).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/download", handleDownload).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/downloads", handleGetDownloads).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/downloads/{id}", handleGetDownload).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/stream/{id}", handleStreamFile).Methods("GET", "OPTIONS")
-	
+
 	// Test route
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "ok",
-			"message": "YouTube Downloader API is running",
+			"message": "YouTube & TikTok Downloader API is running",
 		})
 	}).Methods("GET")
 
@@ -112,10 +114,17 @@ func main() {
 	log.Println("  GET  /api/downloads")
 	log.Println("  GET  /api/downloads/{id}")
 	log.Println("  GET  /api/stream/{id}")
-	
+
 	if err := http.ListenAndServe(":8080", router); err != nil {
 		log.Fatal("Server failed to start:", err)
 	}
+}
+
+func detectPlatform(url string) string {
+	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vm.tiktok.com") {
+		return "tiktok"
+	}
+	return "youtube"
 }
 
 func handleGetFormats(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +148,10 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Detect platform
+	platform := detectPlatform(req.URL)
+	log.Printf("Detected platform: %s", platform)
+
 	// Set defaults
 	if req.Quality == "" {
 		req.Quality = "best"
@@ -152,17 +165,23 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get video info for title
-	titleCmd := exec.Command("yt-dlp", "--get-title", "--no-playlist", "--skip-download", req.URL)
+	var titleCmd *exec.Cmd
+	if platform == "tiktok" {
+		titleCmd = exec.Command("yt-dlp", "--get-title", "--no-warnings", req.URL)
+	} else {
+		titleCmd = exec.Command("yt-dlp", "--get-title", "--no-playlist", "--skip-download", req.URL)
+	}
+
 	titleOutput, err := titleCmd.Output()
 	title := "download"
 	if err == nil {
-		title = sanitizeFilename(string(titleOutput))
+		title = fixUTF8(sanitizeFilename(string(titleOutput))) // <- FIXED HERE
 	}
 	if title == "" {
 		title = fmt.Sprintf("download_%d", time.Now().Unix())
 	}
 
-	log.Printf("Creating download: %s (%s, %s, %s)", title, req.Format, req.Quality, req.Extension)
+	log.Printf("Creating download: %s (%s, %s, %s, %s)", title, platform, req.Format, req.Quality, req.Extension)
 
 	// Create download record
 	download := Download{
@@ -172,6 +191,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		Extension: req.Extension,
 		Status:    "ready",
 		Title:     title,
+		Platform:  platform,
 	}
 
 	if err := db.Create(&download).Error; err != nil {
@@ -184,11 +204,19 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":      download.ID,
-		"message": "Download ready, use /api/stream/" + fmt.Sprint(download.ID) + " to download",
-		"title":   title,
+		"id":       download.ID,
+		"message":  "Download ready, use /api/stream/" + fmt.Sprint(download.ID) + " to download",
+		"title":    title,
+		"platform": platform,
 	})
 }
+
+// ------------------- NEW FUNCTION -------------------
+func fixUTF8(s string) string {
+	r := []rune(s) // преобразует в руны → автоматически убирает невалидные байты
+	return string(r)
+}
+// ----------------------------------------------------
 
 func handleGetDownloads(w http.ResponseWriter, r *http.Request) {
 	log.Println("Handling /api/downloads")
@@ -198,7 +226,7 @@ func handleGetDownloads(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	log.Printf("Found %d downloads", len(downloads))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(downloads)
@@ -240,14 +268,7 @@ func handleStreamFile(w http.ResponseWriter, r *http.Request) {
 	var ffmpegArgs []string
 
 	if download.Format == "audio" {
-		ytdlpArgs = []string{
-			"--no-playlist",
-			"-f", "bestaudio",
-			"--no-check-certificate",
-			"--buffer-size", "16K",
-			"-o", "-",
-			download.URL,
-		}
+		ytdlpArgs = buildAudioDownloadArgs(download.URL, download.Platform)
 
 		audioCodec := getAudioCodec(download.Extension)
 		audioBitrate := download.Quality
@@ -265,15 +286,7 @@ func handleStreamFile(w http.ResponseWriter, r *http.Request) {
 			"pipe:1",
 		}
 	} else {
-		formatStr := buildVideoFormat(download.Quality)
-		ytdlpArgs = []string{
-			"--no-playlist",
-			"-f", formatStr,
-			"--no-check-certificate",
-			"--buffer-size", "16K",
-			"-o", "-",
-			download.URL,
-		}
+		ytdlpArgs = buildVideoDownloadArgs(download.URL, download.Quality, download.Platform)
 
 		videoCodec, audioCodec := getVideoCodecs(download.Extension)
 		ffmpegArgs = []string{
@@ -350,6 +363,51 @@ func handleStreamFile(w http.ResponseWriter, r *http.Request) {
 	})
 
 	log.Printf("Streamed %d bytes for download ID %s", bytesCopied, id)
+}
+
+func buildVideoDownloadArgs(url, quality, platform string) []string {
+	if platform == "tiktok" {
+		// TikTok specific settings
+		return []string{
+			"--no-warnings",
+			"-f", "best",
+			"--buffer-size", "16K",
+			"-o", "-",
+			url,
+		}
+	}
+
+	// YouTube settings
+	formatStr := buildVideoFormat(quality)
+	return []string{
+		"--no-playlist",
+		"-f", formatStr,
+		"--no-check-certificate",
+		"--buffer-size", "16K",
+		"-o", "-",
+		url,
+	}
+}
+
+func buildAudioDownloadArgs(url, platform string) []string {
+	if platform == "tiktok" {
+		return []string{
+			"--no-warnings",
+			"-f", "bestaudio",
+			"--buffer-size", "16K",
+			"-o", "-",
+			url,
+		}
+	}
+
+	return []string{
+		"--no-playlist",
+		"-f", "bestaudio",
+		"--no-check-certificate",
+		"--buffer-size", "16K",
+		"-o", "-",
+		url,
+	}
 }
 
 func buildVideoFormat(quality string) string {

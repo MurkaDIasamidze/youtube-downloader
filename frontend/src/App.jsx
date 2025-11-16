@@ -24,6 +24,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [detectedPlatform, setDetectedPlatform] = useState('');
 
   useEffect(() => {
     fetchFormats();
@@ -31,6 +32,21 @@ function App() {
     const interval = setInterval(fetchDownloads, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    // Detect platform when URL changes
+    if (url) {
+      if (url.includes('tiktok.com') || url.includes('vm.tiktok.com')) {
+        setDetectedPlatform('TikTok');
+      } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
+        setDetectedPlatform('YouTube');
+      } else {
+        setDetectedPlatform('');
+      }
+    } else {
+      setDetectedPlatform('');
+    }
+  }, [url]);
 
   const fetchFormats = async () => {
     try {
@@ -72,8 +88,10 @@ function App() {
       });
 
       if (response.ok) {
-        setMessage('Download started successfully!');
+        const data = await response.json();
+        setMessage(`Download started successfully! Platform: ${data.platform}`);
         setUrl('');
+        setDetectedPlatform('');
         fetchDownloads();
       } else {
         setMessage('Failed to start download');
@@ -99,6 +117,21 @@ function App() {
     }
   };
 
+  const getPlatformBadge = (platform) => {
+    if (platform === 'tiktok') {
+      return (
+        <span className="px-3 py-1.5 bg-gradient-to-r from-cyan-100 to-pink-100 text-pink-700 rounded-full font-bold text-xs">
+          TikTok
+        </span>
+      );
+    }
+    return (
+      <span className="px-3 py-1.5 bg-red-100 text-red-700 rounded-full font-bold text-xs">
+        YouTube
+      </span>
+    );
+  };
+
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleString();
   };
@@ -119,13 +152,11 @@ function App() {
 
   const handleDownloadFile = async (id, title, ext) => {
     try {
-      // Create a link that will trigger browser's save dialog
       const link = document.createElement('a');
       link.href = `${API_URL}/stream/${id}`;
       link.download = `${title || 'download'}.${ext}`;
       link.target = '_blank';
       
-      // Trigger download - browser will show save dialog
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -143,25 +174,40 @@ function App() {
         <div className="text-center mb-8">
           <h1 className="text-5xl font-bold text-gray-800 mb-3 flex items-center justify-center gap-3">
             <Download className="w-12 h-12 text-purple-600" />
-            YT Downloader Pro
+            Universal Downloader Pro
           </h1>
-          <p className="text-gray-600 text-lg">Download videos and audio with custom quality settings</p>
+          <p className="text-gray-600 text-lg">Download from YouTube & TikTok with custom quality settings</p>
+          <div className="flex items-center justify-center gap-4 mt-4">
+            <span className="px-4 py-2 bg-red-100 text-red-700 rounded-full font-semibold text-sm">
+              YouTube
+            </span>
+            <span className="px-4 py-2 bg-gradient-to-r from-cyan-100 to-pink-100 text-pink-700 rounded-full font-bold text-sm">
+              TikTok
+            </span>
+          </div>
         </div>
 
         <div className="bg-white rounded-3xl shadow-2xl p-6 sm:p-8 mb-8">
           <div className="space-y-6">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
-                YouTube URL
+                Video URL {detectedPlatform && (
+                  <span className="ml-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold">
+                    ✓ {detectedPlatform} detected
+                  </span>
+                )}
               </label>
               <input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-                placeholder="https://www.youtube.com/watch?v=..."
+                placeholder="Paste YouTube or TikTok URL here..."
                 className="w-full px-5 py-4 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition text-lg"
               />
+              <p className="text-xs text-gray-500 mt-2">
+                Supports: youtube.com, youtu.be, tiktok.com, vm.tiktok.com
+              </p>
             </div>
 
             <div>
@@ -289,7 +335,7 @@ function App() {
                   <Download className="w-12 h-12 text-gray-400" />
                 </div>
                 <p className="text-gray-500 text-lg">No downloads yet</p>
-                <p className="text-gray-400 text-sm mt-2">Start by adding a YouTube URL above</p>
+                <p className="text-gray-400 text-sm mt-2">Start by adding a YouTube or TikTok URL above</p>
               </div>
             ) : (
               downloads.map((download) => (
@@ -309,6 +355,7 @@ function App() {
                         {download.url}
                       </p>
                       <div className="flex flex-wrap items-center gap-3 text-xs">
+                        {download.platform && getPlatformBadge(download.platform)}
                         <span className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-100 text-purple-700 rounded-full font-medium">
                           {download.format === 'audio' ? (
                             <FileAudio className="w-3.5 h-3.5" />
