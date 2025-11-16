@@ -1,63 +1,75 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
-	_ "github.com/lib/pq"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 type Download struct {
-	ID          int       `json:"id"`
-	URL         string    `json:"url"`
-	Title       string    `json:"title"`
-	Format      string    `json:"format"`
-	Status      string    `json:"status"`
-	FilePath    string    `json:"file_path"`
-	Duration    float64   `json:"duration"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          uint       `json:"id" gorm:"primaryKey"`
+	URL         string     `json:"url" gorm:"not null"`
+	Title       string     `json:"title"`
+	Format      string     `json:"format"` // video, audio
+	Quality     string     `json:"quality"`
+	Extension   string     `json:"extension"`
+	Status      string     `json:"status"` // pending, processing, completed, failed
+	FilePath    string     `json:"file_path"`
+	FileSize    int64      `json:"file_size"`
+	Duration    float64    `json:"duration"`
+	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 type DownloadRequest struct {
-	URL    string `json:"url"`
-	Format string `json:"format"` // "video" or "audio"
+	URL       string `json:"url"`
+	Format    string `json:"format"`    // video, audio
+	Quality   string `json:"quality"`   // 144p, 240p, 360p, 480p, 720p, 1080p, 1440p, 2160p, best (video) | 64k, 128k, 192k, 256k, 320k, best (audio)
+	Extension string `json:"extension"` // mp4, webm, mkv (video) | mp3, aac, opus, m4a (audio)
 }
 
-var db *sql.DB
+type FormatInfo struct {
+	VideoQualities []string `json:"video_qualities"`
+	AudioQualities []string `json:"audio_qualities"`
+	VideoFormats   []string `json:"video_formats"`
+	AudioFormats   []string `json:"audio_formats"`
+}
+
+var db *gorm.DB
+var ffmpegPath = "C:\\ffmpeg-8.0-essentials_build\\bin" // Change this to your FFmpeg path
 
 func main() {
-	// Database connection
-	connStr := "host=localhost port=5432 user=postgres password=root dbname=postgres sslmode=disable"
+	// Database connection with GORM
+	dsn := "host=localhost port=5432 user=postgres password=root dbname=postgres sslmode=disable"
 	var err error
-	db, err = sql.Open("postgres", connStr)
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to connect to database:", err)
 	}
-	defer db.Close()
 
-	// Create table if not exists
-	createTable()
-
-	// Create downloads directory
-	os.MkdirAll("downloads", 0755)
+	// Auto migrate
+	db.AutoMigrate(&Download{})
 
 	router := mux.NewRouter()
+	router.HandleFunc("/api/formats", handleGetFormats).Methods("GET")
 	router.HandleFunc("/api/download", handleDownload).Methods("POST")
 	router.HandleFunc("/api/downloads", handleGetDownloads).Methods("GET")
 	router.HandleFunc("/api/downloads/{id}", handleGetDownload).Methods("GET")
-	router.HandleFunc("/api/file/{id}", handleServeFile).Methods("GET")
+	router.HandleFunc("/api/stream/{id}", handleStreamFile).Methods("GET")
 
-	// CORS - Allow all origins in development
+	// CORS
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -70,22 +82,14 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", handler))
 }
 
-func createTable() {
-	query := `
-	CREATE TABLE IF NOT EXISTS downloads (
-		id SERIAL PRIMARY KEY,
-		url TEXT NOT NULL,
-		title TEXT,
-		format VARCHAR(10),
-		status VARCHAR(20),
-		file_path TEXT,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		completed_at TIMESTAMP
-	)`
-	_, err := db.Exec(query)
-	if err != nil {
-		log.Fatal(err)
+func handleGetFormats(w http.ResponseWriter, r *http.Request) {
+	formats := FormatInfo{
+		VideoQualities: []string{"144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p", "best"},
+		AudioQualities: []string{"64k", "128k", "192k", "256k", "320k", "best"},
+		VideoFormats:   []string{"mp4", "webm", "mkv"},
+		AudioFormats:   []string{"mp3", "aac", "opus", "m4a"},
 	}
+	json.NewEncoder(w).Encode(formats)
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -95,111 +99,246 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert into database
-	var downloadID int
-	err := db.QueryRow(
-		"INSERT INTO downloads (url, format, status) VALUES ($1, $2, $3) RETURNING id",
-		req.URL, req.Format, "pending",
-	).Scan(&downloadID)
-	if err != nil {
+	// Set defaults
+	if req.Quality == "" {
+		if req.Format == "audio" {
+			req.Quality = "best"
+		} else {
+			req.Quality = "best"
+		}
+	}
+	if req.Extension == "" {
+		if req.Format == "audio" {
+			req.Extension = "mp3"
+		} else {
+			req.Extension = "mp4"
+		}
+	}
+
+	// Create download record
+	download := Download{
+		URL:       req.URL,
+		Format:    req.Format,
+		Quality:   req.Quality,
+		Extension: req.Extension,
+		Status:    "pending",
+	}
+
+	if err := db.Create(&download).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Start download in goroutine
-	go processDownload(downloadID, req.URL, req.Format)
+	go processDownload(download.ID, req)
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":      downloadID,
+		"id":      download.ID,
 		"message": "Download started",
 	})
 }
 
-func processDownload(id int, url, format string) {
+func processDownload(id uint, req DownloadRequest) {
 	// Update status to processing
-	db.Exec("UPDATE downloads SET status = $1 WHERE id = $2", "processing", id)
+	db.Model(&Download{}).Where("id = ?", id).Update("status", "processing")
 
-	outputDir := "downloads"
-	outputTemplate := filepath.Join(outputDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", id))
+	// Build yt-dlp command to stream to FFmpeg
+	var ytdlpArgs []string
+	var ffmpegArgs []string
 
-	// Path to your FFmpeg bin folder
-	ffmpegPath := "C:\\ffmpeg-8.0-essentials_build\\bin" // <- change if your ffmpeg folder is different
+	if req.Format == "audio" {
+		// Audio download with quality
+		ytdlpArgs = []string{
+			"--no-playlist",
+			"-f", "bestaudio",
+			"-o", "-", // Output to stdout
+			req.URL,
+		}
 
-	var cmd *exec.Cmd
-	if format == "audio" {
-		cmd = exec.Command("yt-dlp",
-			"--ffmpeg-location", ffmpegPath, // <- ensure yt-dlp finds ffmpeg
-			"-x",
-			"--audio-format", "mp3",
-			"--audio-quality", "0",
-			"-o", outputTemplate,
-			url,
-		)
+		// FFmpeg args for audio conversion
+		audioCodec := getAudioCodec(req.Extension)
+		audioBitrate := req.Quality
+		if audioBitrate == "best" {
+			audioBitrate = "320k"
+		}
+
+		ffmpegArgs = []string{
+			"-i", "pipe:0",
+			"-vn",
+			"-acodec", audioCodec,
+			"-b:a", audioBitrate,
+			"-f", req.Extension,
+			"pipe:1",
+		}
 	} else {
-		cmd = exec.Command("yt-dlp",
-			"--ffmpeg-location", ffmpegPath, // <- ensure yt-dlp finds ffmpeg
-			"-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-			"--merge-output-format", "mp4",
-			"-o", outputTemplate,
-			url,
-		)
+		// Video download with quality
+		formatStr := buildVideoFormat(req.Quality)
+		ytdlpArgs = []string{
+			"--no-playlist",
+			"-f", formatStr,
+			"-o", "-", // Output to stdout
+			req.URL,
+		}
+
+		// FFmpeg args for video conversion
+		videoCodec, audioCodec := getVideoCodecs(req.Extension)
+		ffmpegArgs = []string{
+			"-i", "pipe:0",
+			"-c:v", videoCodec,
+			"-c:a", audioCodec,
+			"-movflags", "+faststart",
+			"-f", req.Extension,
+			"pipe:1",
+		}
 	}
 
-	output, err := cmd.CombinedOutput()
+	// Get video info for title
+	titleCmd := exec.Command("yt-dlp", "--get-title", "--no-playlist", req.URL)
+	titleOutput, _ := titleCmd.Output()
+	title := sanitizeFilename(string(titleOutput))
+	if title == "" {
+		title = fmt.Sprintf("download_%d", id)
+	}
+
+	// Create output file
+	outputPath := fmt.Sprintf("downloads/%d_%s.%s", id, title, req.Extension)
+	outputFile, err := os.Create(outputPath)
 	if err != nil {
-		log.Printf("Download error: %v, Output: %s", err, string(output))
-		db.Exec("UPDATE downloads SET status = $1 WHERE id = $2", "failed", id)
+		log.Printf("Failed to create output file: %v", err)
+		db.Model(&Download{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status": "failed",
+			"title":  title,
+		})
+		return
+	}
+	defer outputFile.Close()
+
+	// Create yt-dlp command
+	ytdlpCmd := exec.Command("yt-dlp", ytdlpArgs...)
+	ytdlpStdout, err := ytdlpCmd.StdoutPipe()
+	if err != nil {
+		log.Printf("Failed to create yt-dlp stdout pipe: %v", err)
+		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
 		return
 	}
 
-	// Get the downloaded file
-	files, _ := filepath.Glob(filepath.Join(outputDir, fmt.Sprintf("%d_*", id)))
-	if len(files) == 0 {
-		db.Exec("UPDATE downloads SET status = $1 WHERE id = $2", "failed", id)
+	// Create FFmpeg command
+	ffmpegCmd := exec.Command(ffmpegPath+"\\ffmpeg.exe", ffmpegArgs...)
+	ffmpegCmd.Stdin = ytdlpStdout
+	ffmpegStdout, err := ffmpegCmd.StdoutPipe()
+	if err != nil {
+		log.Printf("Failed to create ffmpeg stdout pipe: %v", err)
+		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
 		return
 	}
 
-	filePath := files[0]
-	fileName := filepath.Base(filePath)
-	// Extract title from filename
-	title := fileName[len(fmt.Sprintf("%d_", id)) : len(fileName)-len(filepath.Ext(fileName))]
+	// Start both commands
+	if err := ytdlpCmd.Start(); err != nil {
+		log.Printf("Failed to start yt-dlp: %v", err)
+		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
+		return
+	}
 
+	if err := ffmpegCmd.Start(); err != nil {
+		log.Printf("Failed to start ffmpeg: %v", err)
+		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
+		return
+	}
+
+	// Copy FFmpeg output to file
+	fileSize, err := io.Copy(outputFile, ffmpegStdout)
+	if err != nil {
+		log.Printf("Failed to copy output: %v", err)
+		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
+		return
+	}
+
+	// Wait for commands to complete
+	ytdlpCmd.Wait()
+	ffmpegCmd.Wait()
+
+	// Get duration
+	duration := getVideoDuration(outputPath)
+
+	// Update database
 	now := time.Now()
-	db.Exec(
-		"UPDATE downloads SET status = $1, file_path = $2, title = $3, completed_at = $4 WHERE id = $5",
-		"completed", filePath, title, now, id,
+	db.Model(&Download{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":       "completed",
+		"file_path":    outputPath,
+		"title":        title,
+		"file_size":    fileSize,
+		"duration":     duration,
+		"completed_at": now,
+	})
+}
+
+func buildVideoFormat(quality string) string {
+	if quality == "best" {
+		return "bestvideo+bestaudio/best"
+	}
+	height := quality[:len(quality)-1] // Remove 'p'
+	return fmt.Sprintf("bestvideo[height<=%s]+bestaudio/best[height<=%s]", height, height)
+}
+
+func getAudioCodec(extension string) string {
+	switch extension {
+	case "mp3":
+		return "libmp3lame"
+	case "aac", "m4a":
+		return "aac"
+	case "opus":
+		return "libopus"
+	default:
+		return "libmp3lame"
+	}
+}
+
+func getVideoCodecs(extension string) (string, string) {
+	switch extension {
+	case "mp4":
+		return "libx264", "aac"
+	case "webm":
+		return "libvpx-vp9", "libopus"
+	case "mkv":
+		return "libx264", "aac"
+	default:
+		return "libx264", "aac"
+	}
+}
+
+func sanitizeFilename(name string) string {
+	// Remove invalid characters
+	reg := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
+	name = reg.ReplaceAllString(name, "")
+	// Trim spaces and newlines
+	name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
+	name = regexp.MustCompile(`^\s+|\s+$`).ReplaceAllString(name, "")
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	return name
+}
+
+func getVideoDuration(filePath string) float64 {
+	cmd := exec.Command(ffmpegPath+"\\ffprobe.exe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		filePath,
 	)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	duration, _ := strconv.ParseFloat(string(output[:len(output)-1]), 64)
+	return duration
 }
 
 func handleGetDownloads(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, url, title, format, status, file_path, created_at, completed_at FROM downloads ORDER BY created_at DESC")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
 	var downloads []Download
-	for rows.Next() {
-		var d Download
-		var title, filePath sql.NullString
-		var completedAt sql.NullTime
-		err := rows.Scan(&d.ID, &d.URL, &title, &d.Format, &d.Status, &filePath, &d.CreatedAt, &completedAt)
-		if err != nil {
-			continue
-		}
-		if title.Valid {
-			d.Title = title.String
-		}
-		if filePath.Valid {
-			d.FilePath = filePath.String
-		}
-		if completedAt.Valid {
-			d.CompletedAt = &completedAt.Time
-		}
-		downloads = append(downloads, d)
-	}
-
+	db.Order("created_at DESC").Find(&downloads)
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(downloads)
 }
 
@@ -207,42 +346,48 @@ func handleGetDownload(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	var d Download
-	var title, filePath sql.NullString
-	var completedAt sql.NullTime
-	err := db.QueryRow(
-		"SELECT id, url, title, format, status, file_path, created_at, completed_at FROM downloads WHERE id = $1",
-		id,
-	).Scan(&d.ID, &d.URL, &title, &d.Format, &d.Status, &filePath, &d.CreatedAt, &completedAt)
-
-	if err != nil {
+	var download Download
+	if err := db.First(&download, id).Error; err != nil {
 		http.Error(w, "Download not found", http.StatusNotFound)
 		return
 	}
 
-	if title.Valid {
-		d.Title = title.String
-	}
-	if filePath.Valid {
-		d.FilePath = filePath.String
-	}
-	if completedAt.Valid {
-		d.CompletedAt = &completedAt.Time
-	}
-
-	json.NewEncoder(w).Encode(d)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(download)
 }
 
-func handleServeFile(w http.ResponseWriter, r *http.Request) {
+func handleStreamFile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	var filePath string
-	err := db.QueryRow("SELECT file_path FROM downloads WHERE id = $1 AND status = 'completed'", id).Scan(&filePath)
-	if err != nil {
+	var download Download
+	if err := db.Where("id = ? AND status = ?", id, "completed").First(&download).Error; err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	http.ServeFile(w, r, filePath)
+	// Set headers for download
+	w.Header().Set("Content-Type", getContentType(download.Extension))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", download.Title, download.Extension))
+	
+	http.ServeFile(w, r, download.FilePath)
+}
+
+func getContentType(extension string) string {
+	switch extension {
+	case "mp4":
+		return "video/mp4"
+	case "webm":
+		return "video/webm"
+	case "mkv":
+		return "video/x-matroska"
+	case "mp3":
+		return "audio/mpeg"
+	case "aac", "m4a":
+		return "audio/aac"
+	case "opus":
+		return "audio/opus"
+	default:
+		return "application/octet-stream"
+	}
 }

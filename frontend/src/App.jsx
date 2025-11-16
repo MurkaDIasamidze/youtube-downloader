@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Download,
   Music,
@@ -7,22 +7,40 @@ import {
   AlertCircle,
   Loader,
   RefreshCw,
+  Settings,
+  FileVideo,
+  FileAudio,
 } from 'lucide-react';
 
 const API_URL = 'http://localhost:8080/api';
 
-export default function App() {
+function App() {
   const [url, setUrl] = useState('');
   const [format, setFormat] = useState('video');
+  const [quality, setQuality] = useState('best');
+  const [extension, setExtension] = useState('mp4');
   const [downloads, setDownloads] = useState([]);
+  const [formats, setFormats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
+    fetchFormats();
     fetchDownloads();
     const interval = setInterval(fetchDownloads, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  const fetchFormats = async () => {
+    try {
+      const response = await fetch(`${API_URL}/formats`);
+      const data = await response.json();
+      setFormats(data);
+    } catch (error) {
+      console.error('Error fetching formats:', error);
+    }
+  };
 
   const fetchDownloads = async () => {
     try {
@@ -32,6 +50,12 @@ export default function App() {
     } catch (error) {
       console.error('Error fetching downloads:', error);
     }
+  };
+
+  const handleFormatChange = (newFormat) => {
+    setFormat(newFormat);
+    setQuality('best');
+    setExtension(newFormat === 'audio' ? 'mp3' : 'mp4');
   };
 
   const handleSubmit = async () => {
@@ -44,7 +68,7 @@ export default function App() {
       const response = await fetch(`${API_URL}/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, format }),
+        body: JSON.stringify({ url, format, quality, extension }),
       });
 
       if (response.ok) {
@@ -81,19 +105,26 @@ export default function App() {
   const formatDuration = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${mins}m ${secs}s`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleDownloadFile = async (id, title, format) => {
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  const handleDownloadFile = async (id, title, ext) => {
     try {
-      const response = await fetch(`${API_URL}/file/${id}`);
+      const response = await fetch(`${API_URL}/stream/${id}`);
       if (!response.ok) throw new Error('File not found');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      const extension = format === 'audio' ? 'mp3' : 'mp4';
-      a.download = `${title || 'download'}.${extension}`;
+      a.download = `${title || 'download'}.${ext}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -105,20 +136,20 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 p-8">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-50 to-pink-100 p-4 sm:p-8">
+      <div className="max-w-7xl mx-auto">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-800 mb-2 flex items-center justify-center gap-3">
-            <Download className="w-10 h-10 text-purple-600" />
-            YouTube Downloader
+          <h1 className="text-5xl font-bold text-gray-800 mb-3 flex items-center justify-center gap-3">
+            <Download className="w-12 h-12 text-purple-600" />
+            YT Downloader Pro
           </h1>
-          <p className="text-gray-600">Download videos and audio from YouTube</p>
+          <p className="text-gray-600 text-lg">Download videos and audio with custom quality settings</p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 sm:p-8 mb-8">
           <div className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
                 YouTube URL
               </label>
               <input
@@ -127,57 +158,103 @@ export default function App() {
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
                 placeholder="https://www.youtube.com/watch?v=..."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition"
+                className="w-full px-5 py-4 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition text-lg"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                Download Format
+              <label className="block text-sm font-semibold text-gray-700 mb-3">
+                Download Type
               </label>
-              <div className="flex gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <button
                   type="button"
-                  onClick={() => setFormat('video')}
-                  className={`flex-1 p-4 rounded-lg border-2 transition ${
+                  onClick={() => handleFormatChange('video')}
+                  className={`p-5 rounded-xl border-2 transition-all transform hover:scale-105 ${
                     format === 'video'
-                      ? 'border-purple-500 bg-purple-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-purple-500 bg-gradient-to-br from-purple-50 to-blue-50 shadow-lg'
+                      : 'border-gray-200 hover:border-gray-300 bg-white'
                   }`}
                 >
-                  <Video className="w-6 h-6 mx-auto mb-2 text-purple-600" />
-                  <div className="font-medium">Video</div>
-                  <div className="text-sm text-gray-500">MP4 Format</div>
+                  <Video className={`w-8 h-8 mx-auto mb-2 ${format === 'video' ? 'text-purple-600' : 'text-gray-400'}`} />
+                  <div className="font-semibold text-lg">Video</div>
+                  <div className="text-sm text-gray-500">MP4, WebM, MKV</div>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setFormat('audio')}
-                  className={`flex-1 p-4 rounded-lg border-2 transition ${
+                  onClick={() => handleFormatChange('audio')}
+                  className={`p-5 rounded-xl border-2 transition-all transform hover:scale-105 ${
                     format === 'audio'
-                      ? 'border-purple-500 bg-purple-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-purple-500 bg-gradient-to-br from-purple-50 to-pink-50 shadow-lg'
+                      : 'border-gray-200 hover:border-gray-300 bg-white'
                   }`}
                 >
-                  <Music className="w-6 h-6 mx-auto mb-2 text-purple-600" />
-                  <div className="font-medium">Audio</div>
-                  <div className="text-sm text-gray-500">MP3 Format</div>
+                  <Music className={`w-8 h-8 mx-auto mb-2 ${format === 'audio' ? 'text-purple-600' : 'text-gray-400'}`} />
+                  <div className="font-semibold text-lg">Audio</div>
+                  <div className="text-sm text-gray-500">MP3, AAC, Opus</div>
                 </button>
               </div>
             </div>
 
             <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 text-purple-600 hover:text-purple-700 font-medium transition"
+            >
+              <Settings className="w-5 h-5" />
+              {showAdvanced ? 'Hide' : 'Show'} Advanced Settings
+            </button>
+
+            {showAdvanced && formats && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Quality
+                  </label>
+                  <select
+                    value={quality}
+                    onChange={(e) => setQuality(e.target.value)}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition bg-white"
+                  >
+                    {(format === 'video' ? formats.video_qualities : formats.audio_qualities).map((q) => (
+                      <option key={q} value={q}>
+                        {q === 'best' ? 'Best Available' : q}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Format
+                  </label>
+                  <select
+                    value={extension}
+                    onChange={(e) => setExtension(e.target.value)}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition bg-white"
+                  >
+                    {(format === 'video' ? formats.video_formats : formats.audio_formats).map((f) => (
+                      <option key={f} value={f}>
+                        {f.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <button
               onClick={handleSubmit}
               disabled={loading || !url}
-              className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white py-3 rounded-lg font-medium hover:from-purple-700 hover:to-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full bg-gradient-to-r from-purple-600 via-purple-500 to-blue-500 text-white py-4 rounded-xl font-semibold text-lg hover:from-purple-700 hover:via-purple-600 hover:to-blue-600 transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3 shadow-lg"
             >
               {loading ? (
                 <>
-                  <Loader className="w-5 h-5 animate-spin" />
-                  Starting Download...
+                  <Loader className="w-6 h-6 animate-spin" />
+                  Processing Download...
                 </>
               ) : (
                 <>
-                  <Download className="w-5 h-5" />
+                  <Download className="w-6 h-6" />
                   Start Download
                 </>
               )}
@@ -185,10 +262,10 @@ export default function App() {
 
             {message && (
               <div
-                className={`p-4 rounded-lg ${
+                className={`p-4 rounded-xl font-medium ${
                   message.includes('success')
-                    ? 'bg-green-50 text-green-700'
-                    : 'bg-red-50 text-red-700'
+                    ? 'bg-green-100 text-green-800 border border-green-200'
+                    : 'bg-red-100 text-red-800 border border-red-200'
                 }`}
               >
                 {message}
@@ -197,50 +274,71 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-xl p-8">
-          <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <RefreshCw className="w-6 h-6 text-purple-600" />
+        <div className="bg-white rounded-3xl shadow-2xl p-6 sm:p-8">
+          <h2 className="text-3xl font-bold text-gray-800 mb-6 flex items-center gap-3">
+            <RefreshCw className="w-8 h-8 text-purple-600" />
             Download History
           </h2>
 
           <div className="space-y-4">
             {downloads.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                No downloads yet. Start by adding a YouTube URL above.
+              <div className="text-center py-16">
+                <div className="inline-block p-6 bg-gray-100 rounded-full mb-4">
+                  <Download className="w-12 h-12 text-gray-400" />
+                </div>
+                <p className="text-gray-500 text-lg">No downloads yet</p>
+                <p className="text-gray-400 text-sm mt-2">Start by adding a YouTube URL above</p>
               </div>
             ) : (
               downloads.map((download) => (
                 <div
                   key={download.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition"
+                  className="border-2 border-gray-100 rounded-xl p-5 hover:shadow-xl hover:border-purple-200 transition-all bg-gradient-to-r from-white to-gray-50"
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-3 mb-3">
                         {getStatusIcon(download.status)}
-                        <h3 className="font-medium text-gray-800 truncate">
+                        <h3 className="font-semibold text-gray-800 text-lg truncate">
                           {download.title || 'Processing...'}
                         </h3>
                       </div>
-                      <p className="text-sm text-gray-500 truncate mb-2">
+                      <p className="text-sm text-gray-500 truncate mb-3">
                         {download.url}
                       </p>
-                      <div className="flex items-center gap-4 text-xs text-gray-400">
-                        <span className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-3 text-xs">
+                        <span className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-100 text-purple-700 rounded-full font-medium">
                           {download.format === 'audio' ? (
-                            <Music className="w-3 h-3" />
+                            <FileAudio className="w-3.5 h-3.5" />
                           ) : (
-                            <Video className="w-3 h-3" />
+                            <FileVideo className="w-3.5 h-3.5" />
                           )}
-                          {download.format.toUpperCase()}
+                          {download.extension.toUpperCase()}
                         </span>
-                        <span>{formatDate(download.created_at)}</span>
-                        <span className="capitalize">{download.status}</span>
+                        <span className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full font-medium">
+                          {download.quality}
+                        </span>
+                        <span className={`px-3 py-1.5 rounded-full font-medium capitalize ${
+                          download.status === 'completed' ? 'bg-green-100 text-green-700' :
+                          download.status === 'processing' ? 'bg-blue-100 text-blue-700' :
+                          download.status === 'failed' ? 'bg-red-100 text-red-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {download.status}
+                        </span>
                         {download.duration > 0 && (
-                          <span className="text-green-600 font-medium">
+                          <span className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-full font-medium">
                             ⏱ {formatDuration(download.duration)}
                           </span>
                         )}
+                        {download.file_size > 0 && (
+                          <span className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-full font-medium">
+                            📦 {formatFileSize(download.file_size)}
+                          </span>
+                        )}
+                        <span className="text-gray-400">
+                          {formatDate(download.created_at)}
+                        </span>
                       </div>
                     </div>
 
@@ -250,12 +348,12 @@ export default function App() {
                           handleDownloadFile(
                             download.id,
                             download.title,
-                            download.format
+                            download.extension
                           )
                         }
-                        className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm font-medium flex items-center gap-2 whitespace-nowrap"
+                        className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-lg hover:from-purple-700 hover:to-blue-700 transition-all transform hover:scale-105 font-semibold flex items-center gap-2 whitespace-nowrap shadow-lg"
                       >
-                        <Download className="w-4 h-4" />
+                        <Download className="w-5 h-5" />
                         Download
                       </button>
                     )}
@@ -269,3 +367,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;
