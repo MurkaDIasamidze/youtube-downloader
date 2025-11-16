@@ -87,18 +87,6 @@ export default {
 4. Click "Start Download"
 5. Download from history when ready
 
-## Testing
-
-```bash
-# Run tests
-go test ./... -v
-
-# With coverage
-go test ./... -cover
-go test ./... -coverprofile=coverage.out
-go tool cover -html=coverage.out
-```
-
 ## Project Structure
 
 ```
