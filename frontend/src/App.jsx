@@ -92,6 +92,7 @@ function App() {
       case 'failed':
         return <AlertCircle className="w-5 h-5 text-red-500" />;
       case 'processing':
+      case 'streaming':
         return <Loader className="w-5 h-5 text-blue-500 animate-spin" />;
       default:
         return <RefreshCw className="w-5 h-5 text-gray-400" />;
@@ -118,17 +119,18 @@ function App() {
 
   const handleDownloadFile = async (id, title, ext) => {
     try {
-      const response = await fetch(`${API_URL}/stream/${id}`);
-      if (!response.ok) throw new Error('File not found');
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${title || 'download'}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      // Create a link that will trigger browser's save dialog
+      const link = document.createElement('a');
+      link.href = `${API_URL}/stream/${id}`;
+      link.download = `${title || 'download'}.${ext}`;
+      link.target = '_blank';
+      
+      // Trigger download - browser will show save dialog
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setMessage('Download started! Check your browser downloads.');
     } catch (error) {
       console.error('Download error:', error);
       setMessage('Error downloading file: ' + error.message);
@@ -263,7 +265,7 @@ function App() {
             {message && (
               <div
                 className={`p-4 rounded-xl font-medium ${
-                  message.includes('success')
+                  message.includes('success') || message.includes('started')
                     ? 'bg-green-100 text-green-800 border border-green-200'
                     : 'bg-red-100 text-red-800 border border-red-200'
                 }`}
@@ -320,7 +322,7 @@ function App() {
                         </span>
                         <span className={`px-3 py-1.5 rounded-full font-medium capitalize ${
                           download.status === 'completed' ? 'bg-green-100 text-green-700' :
-                          download.status === 'processing' ? 'bg-blue-100 text-blue-700' :
+                          download.status === 'processing' || download.status === 'streaming' ? 'bg-blue-100 text-blue-700' :
                           download.status === 'failed' ? 'bg-red-100 text-red-700' :
                           'bg-gray-100 text-gray-700'
                         }`}>
@@ -342,7 +344,7 @@ function App() {
                       </div>
                     </div>
 
-                    {download.status === 'completed' && (
+                    {(download.status === 'ready' || download.status === 'completed') && (
                       <button
                         onClick={() =>
                           handleDownloadFile(
