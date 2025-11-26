@@ -1,259 +1,130 @@
-# YouTube Downloader - Setup Instructions
+# Universal Downloader Pro
 
-A full-stack application to download YouTube videos and audio files using Go, PostgreSQL, React, yt-dlp, and ffmpeg.
+Download videos and audio from YouTube and TikTok with custom quality settings.
+
+## Features
+
+- 🎥 Video & 🎵 Audio downloads from YouTube and TikTok
+- ⚙️ Multiple quality options (144p-4K, 64k-320k)
+- 📝 Format selection (MP4, WebM, MKV, MP3, AAC, Opus)
+- 📊 Download history with real-time status
+- 🔄 Direct streaming without temp files
 
 ## Prerequisites
 
-Install the following on your system:
+- Go 1.21+
+- Node.js 18+
+- PostgreSQL 12+
+- yt-dlp: `pip install yt-dlp`
+- FFmpeg: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
 
-1. **Go** (1.21 or higher)
-   ```bash
-   # Download from https://golang.org/dl/
-   ```
+## Quick Install
 
-2. **Node.js** (18 or higher) and npm
-   ```bash
-   # Download from https://nodejs.org/
-   ```
-
-3. **PostgreSQL** (14 or higher)
-   ```bash
-   # Ubuntu/Debian
-   sudo apt update
-   sudo apt install postgresql postgresql-contrib
-   
-   # macOS
-   brew install postgresql@14
-   brew services start postgresql@14
-   
-   # Windows: Download from https://www.postgresql.org/download/
-   ```
-
-4. **yt-dlp** (YouTube downloader)
-   ```bash
-   # Using pip
-   pip install yt-dlp
-   
-   # Or download binary from https://github.com/yt-dlp/yt-dlp/releases
-   ```
-
-5. **ffmpeg** (for audio extraction and video merging)
-   ```bash
-   # Ubuntu/Debian
-   sudo apt install ffmpeg
-   
-   # macOS
-   brew install ffmpeg
-   
-   # Windows: Download from https://ffmpeg.org/download.html
-   ```
-
-## Database Setup
-
-1. **Create PostgreSQL database and user:**
-   ```bash
-   # Login to PostgreSQL
-   sudo -u postgres psql
-   
-   # Or on macOS
-   psql postgres
-   ```
-
-2. **Run these SQL commands:**
-   ```sql
-   CREATE DATABASE ytdownloader;
-   CREATE USER postgres WITH PASSWORD 'postgres';
-   GRANT ALL PRIVILEGES ON DATABASE ytdownloader TO postgres;
-   \q
-   ```
-
-3. **Test connection:**
-   ```bash
-   psql -h localhost -U postgres -d ytdownloader
-   # Enter password: postgres
-   ```
-
-## Backend Setup
-
-1. **Create project directory:**
-   ```bash
-   mkdir youtube-downloader
-   cd youtube-downloader
-   ```
-
-2. **Create the Go files:**
-   - Save the `main.go` file from the artifact
-   - Save the `go.mod` file from the artifact
-
-3. **Install Go dependencies:**
-   ```bash
-   go mod tidy
-   ```
-
-4. **Update database connection (if needed):**
-   Edit `main.go` line 34 if your PostgreSQL credentials differ:
-   ```go
-   connStr := "host=localhost port=5432 user=YOUR_USER password=YOUR_PASSWORD dbname=ytdownloader sslmode=disable"
-   ```
-
-5. **Create downloads directory:**
-   ```bash
-   mkdir downloads
-   ```
-
-6. **Run the backend:**
-   ```bash
-   go run main.go
-   ```
-   
-   You should see: `Server starting on :8080`
-
-## Frontend Setup
-
-1. **Create React app (in a new terminal):**
-   ```bash
-   # Using Vite (recommended)
-   npm create vite@latest youtube-downloader-frontend -- --template react
-   cd youtube-downloader-frontend
-   npm install
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   # Install Tailwind CSS 3.x and related packages
-   npm install -D tailwindcss@3 postcss autoprefixer
-   
-   # Install Lucide icons
-   npm install lucide-react
-   
-   # Initialize Tailwind (after installation)
-   npx tailwindcss init -p
-   ```
-
-3. **Configure Tailwind:**
-   
-   Edit `tailwind.config.js`:
-   ```js
-   export default {
-     content: [
-       "./index.html",
-       "./src/**/*.{js,ts,jsx,tsx}",
-     ],
-     theme: {
-       extend: {},
-     },
-     plugins: [],
-   }
-   ```
-
-4. **Update CSS:**
-   
-   Replace `src/index.css` with:
-   ```css
-   @tailwind base;
-   @tailwind components;
-   @tailwind utilities;
-   ```
-
-5. **Replace App.jsx:**
-   - Copy the React component from the artifact to `src/App.jsx`
-
-6. **Run the frontend:**
-   ```bash
-   npm run dev
-   ```
-   
-   Open http://localhost:5173 in your browser
-
-## Usage
-
-1. **Start the backend** (terminal 1):
-   ```bash
-   cd youtube-downloader
-   go run main.go
-   ```
-
-2. **Start the frontend** (terminal 2):
-   ```bash
-   cd youtube-downloader-frontend
-   npm run dev
-   ```
-
-3. **Use the application:**
-   - Open http://localhost:5173
-   - Paste a YouTube URL
-   - Select Video or Audio format
-   - Click "Start Download"
-   - Monitor progress in the download history
-   - Click "Download" when complete
-
-## Troubleshooting
-
-### yt-dlp not found
 ```bash
-# Check if installed
-which yt-dlp
+# 1. Clone repo
+git clone <your-repo-url>
+cd universal-downloader-pro
 
-# Add to PATH if needed (Linux/macOS)
-export PATH=$PATH:/usr/local/bin
+# 2. Setup PostgreSQL
+psql -U postgres -c "CREATE DATABASE postgres;"
+
+# 3. Backend setup
+go mod tidy
+# Update main.go line 49 with FFmpeg path and line 79 with DB password
+go run main.go
+
+# 4. Frontend setup (new terminal)
+cd frontend
+npm install
+npm install lucide-react
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+npm run dev
 ```
 
-### PostgreSQL connection error
-```bash
-# Check if PostgreSQL is running
-sudo systemctl status postgresql  # Linux
-brew services list                # macOS
+## Configuration
 
-# Start if stopped
-sudo systemctl start postgresql   # Linux
-brew services start postgresql    # macOS
+**main.go** (line 79):
+```go
+dsn := "host=localhost port=5432 user=postgres password=YOUR_PASSWORD dbname=postgres sslmode=disable"
 ```
 
-### CORS errors
-- Ensure backend is running on port 8080
-- Check that the API_URL in App.jsx matches your backend URL
-
-### Download failures
-- Verify yt-dlp and ffmpeg are installed: `yt-dlp --version` and `ffmpeg -version`
-- Check that the YouTube URL is valid
-- Some videos may be restricted by region or age
-
-## Project Structure
-
+**main.go** (line 49):
+```go
+var ffmpegPath = "C:\\ffmpeg-8.0-essentials_build\\bin" // Windows
+// var ffmpegPath = "/usr/local/bin" // macOS/Linux
 ```
-youtube-downloader/
-├── main.go           # Backend server
-├── go.mod            # Go dependencies
-└── downloads/        # Downloaded files
 
-youtube-downloader-frontend/
-├── src/
-│   ├── App.jsx       # Main React component
-│   └── index.css     # Tailwind CSS
-├── package.json      # Node dependencies
-└── vite.config.js    # Vite configuration
+**tailwind.config.js**:
+```javascript
+export default {
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  theme: { extend: {} },
+  plugins: [],
+}
+```
+
+**src/index.css**:
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 ```
 
 ## API Endpoints
 
-- `POST /api/download` - Start a new download
-- `GET /api/downloads` - Get all downloads
-- `GET /api/downloads/:id` - Get specific download
-- `GET /api/file/:id` - Download the file
+- `GET /api/formats` - Get available formats
+- `POST /api/download` - Create download job
+- `GET /api/downloads` - List all downloads
+- `GET /api/downloads/{id}` - Get specific download
+- `GET /api/stream/{id}` - Stream/download file
 
-## Features
+## Usage
 
-- ✅ Download YouTube videos (MP4)
-- ✅ Extract audio only (MP3)
-- ✅ Real-time download status
-- ✅ Download history tracking
-- ✅ PostgreSQL database storage
-- ✅ Clean, modern UI
-- ✅ Concurrent downloads support
+1. Open `http://localhost:5173`
+2. Paste YouTube or TikTok URL
+3. Select format (Video/Audio)
+4. Click "Start Download"
+5. Download from history when ready
 
-## Notes
+## Project Structure
 
-- Downloads are stored in the `downloads/` directory
-- The database table is created automatically on first run
-- Status updates every 3 seconds automatically
-- yt-dlp handles YouTube's changing API automatically
+```
+├── main.go              # Backend server
+├── go.mod              # Go dependencies
+├── tests/
+│   └── main_test.go    # Unit tests
+└── frontend/
+    ├── src/
+    │   ├── App.jsx     # React component
+    │   ├── main.jsx
+    │   └── index.css
+    ├── package.json
+    ├── vite.config.js
+    └── tailwind.config.js
+```
+
+## Troubleshooting
+
+**Database error**: Check PostgreSQL is running and credentials are correct
+
+**yt-dlp not found**: Install with `pip install yt-dlp` and add to PATH
+
+**FFmpeg error**: Update `ffmpegPath` in main.go with correct installation path
+
+**CORS error**: Ensure backend runs on :8080, frontend on :5173
+
+**Download fails**: Update yt-dlp: `pip install -U yt-dlp`
+
+## Tech Stack
+
+**Backend**: Go, Gorilla Mux, GORM, PostgreSQL, yt-dlp, FFmpeg  
+**Frontend**: React, Vite, Tailwind CSS, Lucide Icons
+
+## License
+
+MIT License - For educational and personal use only. Respect copyright laws.
+
+## Note
+
+This application is for personal use. Always respect platform terms of service and copyright laws when downloading content.
