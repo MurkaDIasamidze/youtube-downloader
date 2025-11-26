@@ -6,7 +6,7 @@ Download videos and audio from YouTube and TikTok with custom quality settings.
 
 - 🎥 Video & 🎵 Audio downloads from YouTube and TikTok
 - ⚙️ Multiple quality options (144p-4K, 64k-320k)
-- 📝 Format selection (MP4, WebM, MKV, MP3, AAC, Opus)
+- 📝 Format selection (MP4, WebM, MKV, MP3,Opus)
 - 📊 Download history with real-time status
 - 🔄 Direct streaming without temp files
 
