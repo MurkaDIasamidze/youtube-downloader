@@ -239,7 +239,7 @@ function App() {
                 >
                   <Music className={`w-8 h-8 mx-auto mb-2 ${format === 'audio' ? 'text-purple-600' : 'text-gray-400'}`} />
                   <div className="font-semibold text-lg">Audio</div>
-                  <div className="text-sm text-gray-500">MP3, AAC, Opus</div>
+                  <div className="text-sm text-gray-500">MP3, Opus</div>
                 </button>
               </div>
             </div>

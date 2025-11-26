@@ -1,18 +1,21 @@
 package main
 
 import (
-	"encoding/json"
+	"bufio"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -24,7 +27,7 @@ type Download struct {
 	Format      string     `json:"format"` // video, audio
 	Quality     string     `json:"quality"`
 	Extension   string     `json:"extension"`
-	Status      string     `json:"status"` // pending, processing, completed, failed
+	Status      string     `json:"status"` // ready, streaming, completed, failed
 	Duration    float64    `json:"duration"`
 	Platform    string     `json:"platform"` // youtube, tiktok
 	CreatedAt   time.Time  `json:"created_at"`
@@ -45,30 +48,19 @@ type FormatInfo struct {
 	AudioFormats   []string `json:"audio_formats"`
 }
 
-var db *gorm.DB
-var ffmpegPath = "C:\\ffmpeg-8.0-essentials_build\\bin" // Change this to your FFmpeg path
-
-// CORS middleware
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Request: %s %s", r.Method, r.URL.Path)
-
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin")
-		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Disposition")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
+var (
+	db         *gorm.DB
+	ffmpegPath = "C:\\ffmpeg-8.0-essentials_build\\bin" // Change to your FFmpeg path
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 512*1024) // Increased to 512KB
+			return &buf
+		},
+	}
+)
 
 func main() {
-	// Database connection with GORM
+	// Database connection
 	dsn := "host=localhost port=5432 user=postgres password=root dbname=postgres sslmode=disable"
 	var err error
 	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
@@ -85,39 +77,58 @@ func main() {
 
 	log.Println("Database migration completed")
 
-	router := mux.NewRouter()
+	// Initialize Fiber app
+	app := fiber.New(fiber.Config{
+		StreamRequestBody: true,
+		BodyLimit:         10 * 1024 * 1024, // 10MB
+		ReadTimeout:       30 * time.Minute,
+		WriteTimeout:      30 * time.Minute,
+		IdleTimeout:       30 * time.Minute,
+		DisableKeepalive:  false,
+	})
 
-	// Apply CORS middleware
-	router.Use(corsMiddleware)
+	// Middleware
+	app.Use(recover.New())
+	app.Use(logger.New(logger.Config{
+		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
+	}))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "*",
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders:     "Content-Type, Authorization, Accept, Origin",
+		ExposeHeaders:    "Content-Length, Content-Disposition",
+		AllowCredentials: false,
+	}))
 
-	// Register routes
-	router.HandleFunc("/api/formats", handleGetFormats).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/download", handleDownload).Methods("POST", "OPTIONS")
-	router.HandleFunc("/api/downloads", handleGetDownloads).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/downloads/{id}", handleGetDownload).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/stream/{id}", handleStreamFile).Methods("GET", "OPTIONS")
+	// Routes
+	app.Get("/", handleRoot)
+	app.Get("/api/formats", handleGetFormats)
+	app.Post("/api/download", handleDownload)
+	app.Get("/api/downloads", handleGetDownloads)
+	app.Get("/api/downloads/:id", handleGetDownload)
+	app.Get("/api/stream/:id", handleStreamFile)
 
-	// Test route
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "ok",
-			"message": "YouTube & TikTok Downloader API is running",
-		})
-	}).Methods("GET")
-
-	log.Println("Server starting on :8080")
+	port := ":8080" // Changed from 8080
+	log.Printf("Server starting on %s", port)
 	log.Println("Available routes:")
 	log.Println("  GET  /")
 	log.Println("  GET  /api/formats")
 	log.Println("  POST /api/download")
 	log.Println("  GET  /api/downloads")
-	log.Println("  GET  /api/downloads/{id}")
-	log.Println("  GET  /api/stream/{id}")
+	log.Println("  GET  /api/downloads/:id")
+	log.Println("  GET  /api/stream/:id")
 
-	if err := http.ListenAndServe(":8080", router); err != nil {
+	if err := app.Listen(port); err != nil {
 		log.Fatal("Server failed to start:", err)
 	}
+}
+
+func handleRoot(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "YouTube & TikTok Downloader API is running",
+		"version": "2.0 (Fiber + Optimized Streaming)",
+	})
 }
 
 func detectPlatform(url string) string {
@@ -127,30 +138,35 @@ func detectPlatform(url string) string {
 	return "youtube"
 }
 
-func handleGetFormats(w http.ResponseWriter, r *http.Request) {
-	log.Println("Handling /api/formats")
-	w.Header().Set("Content-Type", "application/json")
+func handleGetFormats(c *fiber.Ctx) error {
 	formats := FormatInfo{
 		VideoQualities: []string{"144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p", "best"},
 		AudioQualities: []string{"64k", "128k", "192k", "256k", "320k", "best"},
 		VideoFormats:   []string{"mp4", "webm", "mkv"},
-		AudioFormats:   []string{"mp3", "aac", "opus", "m4a"},
+		AudioFormats:   []string{"mp3", "opus", "m4a"},
 	}
-	json.NewEncoder(w).Encode(formats)
+	return c.JSON(formats)
 }
 
-func handleDownload(w http.ResponseWriter, r *http.Request) {
-	log.Println("Handling /api/download")
+func handleDownload(c *fiber.Ctx) error {
 	var req DownloadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Error decoding request: %v", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if err := c.BodyParser(&req); err != nil {
+		log.Printf("Error parsing request: %v", err)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request body",
+		})
+	}
+
+	// Validate URL
+	if req.URL == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "URL is required",
+		})
 	}
 
 	// Detect platform
 	platform := detectPlatform(req.URL)
-	log.Printf("Detected platform: %s", platform)
+	log.Printf("Detected platform: %s for URL: %s", platform, req.URL)
 
 	// Set defaults
 	if req.Quality == "" {
@@ -164,19 +180,8 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get video info for title
-	var titleCmd *exec.Cmd
-	if platform == "tiktok" {
-		titleCmd = exec.Command("yt-dlp", "--get-title", "--no-warnings", req.URL)
-	} else {
-		titleCmd = exec.Command("yt-dlp", "--get-title", "--no-playlist", "--skip-download", req.URL)
-	}
-
-	titleOutput, err := titleCmd.Output()
-	title := "download"
-	if err == nil {
-		title = fixUTF8(sanitizeFilename(string(titleOutput))) // <- FIXED HERE
-	}
+	// Get video title
+	title := getVideoTitle(req.URL, platform)
 	if title == "" {
 		title = fmt.Sprintf("download_%d", time.Now().Unix())
 	}
@@ -196,194 +201,200 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	if err := db.Create(&download).Error; err != nil {
 		log.Printf("Database error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to create download record",
+		})
 	}
 
 	log.Printf("Download created with ID: %d", download.ID)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	return c.JSON(fiber.Map{
 		"id":       download.ID,
-		"message":  "Download ready, use /api/stream/" + fmt.Sprint(download.ID) + " to download",
+		"message":  fmt.Sprintf("Download ready, use /api/stream/%d to download", download.ID),
 		"title":    title,
 		"platform": platform,
 	})
 }
 
-// ------------------- NEW FUNCTION -------------------
-func fixUTF8(s string) string {
-	r := []rune(s) // преобразует в руны → автоматически убирает невалидные байты
-	return string(r)
-}
-// ----------------------------------------------------
-
-func handleGetDownloads(w http.ResponseWriter, r *http.Request) {
-	log.Println("Handling /api/downloads")
+func handleGetDownloads(c *fiber.Ctx) error {
 	var downloads []Download
 	if err := db.Order("created_at DESC").Find(&downloads).Error; err != nil {
 		log.Printf("Database error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to fetch downloads",
+		})
 	}
 
 	log.Printf("Found %d downloads", len(downloads))
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(downloads)
+	return c.JSON(downloads)
 }
 
-func handleGetDownload(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id := vars["id"]
-	log.Printf("Handling /api/downloads/%s", id)
+func handleGetDownload(c *fiber.Ctx) error {
+	id := c.Params("id")
+	log.Printf("Fetching download: %s", id)
 
 	var download Download
 	if err := db.First(&download, id).Error; err != nil {
 		log.Printf("Download not found: %s", id)
-		http.Error(w, "Download not found", http.StatusNotFound)
-		return
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "Download not found",
+		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(download)
+	return c.JSON(download)
 }
 
-func handleStreamFile(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id := vars["id"]
-	log.Printf("Handling /api/stream/%s", id)
+func handleStreamFile(c *fiber.Ctx) error {
+	id := c.Params("id")
+	log.Printf("Starting stream for ID: %s", id)
 
 	var download Download
 	if err := db.First(&download, id).Error; err != nil {
 		log.Printf("Download not found: %s", id)
-		http.Error(w, "Download not found", http.StatusNotFound)
-		return
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "Download not found",
+		})
 	}
 
-	// Update status to streaming
+	// Update status
 	db.Model(&Download{}).Where("id = ?", id).Update("status", "streaming")
 
-	// Build yt-dlp and ffmpeg commands
+	// Build commands
 	var ytdlpArgs []string
 	var ffmpegArgs []string
 
 	if download.Format == "audio" {
 		ytdlpArgs = buildAudioDownloadArgs(download.URL, download.Platform)
-
-		audioCodec := getAudioCodec(download.Extension)
-		audioBitrate := download.Quality
-		if audioBitrate == "best" {
-			audioBitrate = "320k"
-		}
-
-		ffmpegArgs = []string{
-			"-i", "pipe:0",
-			"-vn",
-			"-acodec", audioCodec,
-			"-b:a", audioBitrate,
-			"-f", download.Extension,
-			"-threads", "0",
-			"pipe:1",
-		}
+		ffmpegArgs = buildAudioFFmpegArgs(download.Extension, download.Quality)
 	} else {
 		ytdlpArgs = buildVideoDownloadArgs(download.URL, download.Quality, download.Platform)
-
-		videoCodec, audioCodec := getVideoCodecs(download.Extension)
-		ffmpegArgs = []string{
-			"-i", "pipe:0",
-			"-c:v", videoCodec,
-			"-preset", "ultrafast",
-			"-c:a", audioCodec,
-			"-movflags", "+frag_keyframe+empty_moov+faststart",
-			"-f", download.Extension,
-			"-threads", "0",
-			"pipe:1",
-		}
+		ffmpegArgs = buildVideoFFmpegArgs(download.Extension)
 	}
 
-	log.Printf("Starting yt-dlp with args: %v", ytdlpArgs)
+	// Start yt-dlp
+	log.Printf("Starting yt-dlp: %v", ytdlpArgs)
 	ytdlpCmd := exec.Command("yt-dlp", ytdlpArgs...)
 	ytdlpStdout, err := ytdlpCmd.StdoutPipe()
 	if err != nil {
-		log.Printf("Failed to create yt-dlp stdout pipe: %v", err)
-		http.Error(w, "Failed to start download", http.StatusInternalServerError)
+		log.Printf("Failed to create yt-dlp pipe: %v", err)
 		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
-		return
+		return c.Status(fiber.StatusInternalServerError).SendString("Failed to start download")
 	}
 
-	log.Printf("Starting ffmpeg with args: %v", ffmpegArgs)
+	ytdlpStderr, _ := ytdlpCmd.StderrPipe()
+
+	// Start ffmpeg
+	log.Printf("Starting ffmpeg: %v", ffmpegArgs)
 	ffmpegCmd := exec.Command(ffmpegPath+"\\ffmpeg.exe", ffmpegArgs...)
 	ffmpegCmd.Stdin = ytdlpStdout
 	ffmpegStdout, err := ffmpegCmd.StdoutPipe()
 	if err != nil {
-		log.Printf("Failed to create ffmpeg stdout pipe: %v", err)
-		http.Error(w, "Failed to start conversion", http.StatusInternalServerError)
+		log.Printf("Failed to create ffmpeg pipe: %v", err)
 		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
-		return
+		return c.Status(fiber.StatusInternalServerError).SendString("Failed to start conversion")
 	}
 
+	ffmpegStderr, _ := ffmpegCmd.StderrPipe()
+
+	// Start processes
 	if err := ytdlpCmd.Start(); err != nil {
 		log.Printf("Failed to start yt-dlp: %v", err)
-		http.Error(w, "Failed to start download", http.StatusInternalServerError)
 		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
-		return
+		return c.Status(fiber.StatusInternalServerError).SendString("Failed to start download")
 	}
 
 	if err := ffmpegCmd.Start(); err != nil {
 		log.Printf("Failed to start ffmpeg: %v", err)
-		http.Error(w, "Failed to start conversion", http.StatusInternalServerError)
+		ytdlpCmd.Process.Kill()
 		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
-		return
+		return c.Status(fiber.StatusInternalServerError).SendString("Failed to start conversion")
 	}
 
-	// Set headers for streaming
-	w.Header().Set("Content-Type", getContentType(download.Extension))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", download.Title, download.Extension))
-	w.Header().Set("Transfer-Encoding", "chunked")
+	// Log errors in background
+	go logErrors(ytdlpStderr, "yt-dlp")
+	go logErrors(ffmpegStderr, "ffmpeg")
 
-	log.Printf("Starting stream for download ID %s", id)
+	// Set response headers
+	c.Set("Content-Type", getContentType(download.Extension))
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.%s\"", download.Title, download.Extension))
+	c.Set("Transfer-Encoding", "chunked")
+	c.Set("Cache-Control", "no-cache")
 
-	// Stream the output directly to the response
-	bytesCopied, err := io.Copy(w, ffmpegStdout)
-	if err != nil {
-		log.Printf("Error streaming file: %v", err)
-		db.Model(&Download{}).Where("id = ?", id).Update("status", "failed")
-		return
-	}
+	// Stream with optimized buffer
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		buf := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(buf)
 
-	// Wait for commands to complete
-	ytdlpCmd.Wait()
-	ffmpegCmd.Wait()
+		totalBytes := int64(0)
+		for {
+			n, err := ffmpegStdout.Read(*buf)
+			if n > 0 {
+				written, writeErr := w.Write((*buf)[:n])
+				if writeErr != nil {
+					log.Printf("Error writing to response: %v", writeErr)
+					break
+				}
+				totalBytes += int64(written)
 
-	// Update database
-	now := time.Now()
-	db.Model(&Download{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":       "completed",
-		"completed_at": now,
+				// Flush more frequently for better streaming
+				if totalBytes%(512*1024) == 0 { // Every 512KB
+					if err := w.Flush(); err != nil {
+						log.Printf("Error flushing: %v", err)
+						break
+					}
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("Error reading from ffmpeg: %v", err)
+				break
+			}
+		}
+
+		// Final flush
+		w.Flush()
+
+		log.Printf("Streamed %d bytes for download ID %s", totalBytes, id)
+
+		// Wait for processes to complete
+		ytdlpCmd.Wait()
+		ffmpegCmd.Wait()
+
+		// Update database
+		now := time.Now()
+		db.Model(&Download{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status":       "completed",
+			"completed_at": now,
+		})
 	})
 
-	log.Printf("Streamed %d bytes for download ID %s", bytesCopied, id)
+	return nil
 }
 
 func buildVideoDownloadArgs(url, quality, platform string) []string {
 	if platform == "tiktok" {
-		// TikTok specific settings
 		return []string{
 			"--no-warnings",
 			"-f", "best",
-			"--buffer-size", "16K",
+			"--concurrent-fragments", "4",
+			"--buffer-size", "512K",
+			"--http-chunk-size", "10M",
 			"-o", "-",
 			url,
 		}
 	}
 
-	// YouTube settings
 	formatStr := buildVideoFormat(quality)
 	return []string{
 		"--no-playlist",
 		"-f", formatStr,
 		"--no-check-certificate",
-		"--buffer-size", "16K",
+		"--concurrent-fragments", "4",
+		"--buffer-size", "512K",
+		"--http-chunk-size", "10M",
+		"--throttled-rate", "100K",
 		"-o", "-",
 		url,
 	}
@@ -391,22 +402,183 @@ func buildVideoDownloadArgs(url, quality, platform string) []string {
 
 func buildAudioDownloadArgs(url, platform string) []string {
 	if platform == "tiktok" {
+		// TikTok: download best quality with optimized settings
 		return []string{
 			"--no-warnings",
-			"-f", "bestaudio",
-			"--buffer-size", "16K",
+			"-f", "best",
+			"--concurrent-fragments", "16", // Increased to 16
+			"--buffer-size", "2M", // Increased to 2MB
+			"--http-chunk-size", "10M",
+			"--retries", "10",
+			"--fragment-retries", "10",
+			"--no-part", // Don't create .part files
 			"-o", "-",
 			url,
 		}
 	}
 
+	// YouTube: optimize for audio streams
 	return []string{
 		"--no-playlist",
-		"-f", "bestaudio",
+		"-f", "bestaudio[ext=m4a]/bestaudio/best", // Prefer m4a for AAC
 		"--no-check-certificate",
-		"--buffer-size", "16K",
+		"--concurrent-fragments", "16", // Increased to 16
+		"--buffer-size", "2M", // Increased to 2MB
+		"--http-chunk-size", "10M",
+		"--retries", "10",
+		"--fragment-retries", "10",
+		"--no-part", // Don't create .part files
+		"--extractor-args", "youtube:player_client=android", // Faster YouTube extraction
 		"-o", "-",
 		url,
+	}
+}
+
+func buildVideoFFmpegArgs(extension string) []string {
+	switch extension {
+	case "mp4":
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-c:v", "libx264",
+			"-preset", "veryfast", // Changed from ultrafast for better compression
+			"-tune", "zerolatency", // Optimize for streaming
+			"-crf", "23",
+			"-c:a", "aac",
+			"-b:a", "192k",
+			"-movflags", "+frag_keyframe+empty_moov+faststart+default_base_moof",
+			"-max_muxing_queue_size", "9999",
+			"-f", "mp4",
+			"-threads", "0",
+			"pipe:1",
+		}
+	case "webm":
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-c:v", "libvpx",
+			"-deadline", "realtime", // Fastest VP8 encoding
+			"-cpu-used", "8", // Maximum speed (0-16, higher = faster)
+			"-crf", "23",
+			"-b:v", "2M",
+			"-c:a", "libopus",
+			"-b:a", "192k",
+			"-max_muxing_queue_size", "9999",
+			"-f", "webm",
+			"-threads", "0",
+			"pipe:1",
+		}
+	case "mkv":
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-tune", "zerolatency",
+			"-crf", "23",
+			"-c:a", "aac",
+			"-b:a", "192k",
+			"-max_muxing_queue_size", "9999",
+			"-f", "matroska",
+			"-threads", "0",
+			"pipe:1",
+		}
+	default:
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-tune", "zerolatency",
+			"-crf", "23",
+			"-c:a", "aac",
+			"-b:a", "192k",
+			"-movflags", "+frag_keyframe+empty_moov+faststart",
+			"-max_muxing_queue_size", "9999",
+			"-f", "mp4",
+			"-threads", "0",
+			"pipe:1",
+		}
+	}
+}
+
+func buildAudioFFmpegArgs(extension, quality string) []string {
+	audioBitrate := quality
+	if audioBitrate == "best" {
+		audioBitrate = "320k"
+	}
+
+	switch extension {
+	case "mp3":
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-vn",
+			"-acodec", "libmp3lame",
+			"-b:a", audioBitrate,
+			"-q:a", "0",
+			"-compression_level", "0",
+			"-ar", "44100",
+			"-ac", "2",
+			"-f", "mp3",
+			"-threads", "0",
+			"-max_muxing_queue_size", "9999",
+			"pipe:1",
+		}
+	case "m4a":
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-vn",
+			"-c:a", "aac",
+			"-b:a", audioBitrate,
+			"-aac_coder", "fast",
+			"-profile:a", "aac_low",
+			"-ar", "44100",
+			"-ac", "2",
+			"-movflags", "+frag_keyframe+empty_moov+faststart",
+			"-f", "ipod",
+			"-threads", "0",
+			"-max_muxing_queue_size", "9999",
+			"pipe:1",
+		}
+	case "opus":
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-vn",
+			"-acodec", "libopus",
+			"-b:a", audioBitrate,
+			"-compression_level", "0",
+			"-ar", "48000",
+			"-ac", "2",
+			"-f", "opus",
+			"-threads", "0",
+			"-max_muxing_queue_size", "9999",
+			"pipe:1",
+		}
+	default:
+		return []string{
+			"-hide_banner",
+			"-loglevel", "error",
+			"-i", "pipe:0",
+			"-vn",
+			"-acodec", "libmp3lame",
+			"-b:a", audioBitrate,
+			"-ar", "44100",
+			"-ac", "2",
+			"-f", "mp3",
+			"-threads", "0",
+			"-max_muxing_queue_size", "9999",
+			"pipe:1",
+		}
 	}
 }
 
@@ -444,29 +616,38 @@ func getVideoCodecs(extension string) (string, string) {
 	}
 }
 
+func getVideoTitle(url, platform string) string {
+	var cmd *exec.Cmd
+	if platform == "tiktok" {
+		cmd = exec.Command("yt-dlp", "--get-title", "--no-warnings", url)
+	} else {
+		cmd = exec.Command("yt-dlp", "--get-title", "--no-playlist", "--skip-download", url)
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("Failed to get title: %v", err)
+		return ""
+	}
+
+	title := strings.TrimSpace(string(output))
+	title = fixUTF8(sanitizeFilename(title))
+	return title
+}
+
+func fixUTF8(s string) string {
+	return string([]rune(s))
+}
+
 func sanitizeFilename(name string) string {
 	reg := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
 	name = reg.ReplaceAllString(name, "")
 	name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
-	name = regexp.MustCompile(`^\s+|\s+$`).ReplaceAllString(name, "")
+	name = strings.TrimSpace(name)
 	if len(name) > 200 {
 		name = name[:200]
 	}
 	return name
-}
-
-func getVideoDuration(url string) float64 {
-	cmd := exec.Command("yt-dlp",
-		"--get-duration",
-		"--no-playlist",
-		url,
-	)
-	output, err := cmd.Output()
-	if err != nil {
-		return 0
-	}
-	duration, _ := strconv.ParseFloat(string(output[:len(output)-1]), 64)
-	return duration
 }
 
 func getContentType(extension string) string {
@@ -479,11 +660,44 @@ func getContentType(extension string) string {
 		return "video/x-matroska"
 	case "mp3":
 		return "audio/mpeg"
-	case "aac", "m4a":
-		return "audio/aac"
+	case "m4a":
+		return "audio/mp4"
 	case "opus":
 		return "audio/opus"
 	default:
 		return "application/octet-stream"
 	}
+}
+
+func logErrors(stderr io.ReadCloser, source string) {
+	if stderr == nil {
+		return
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, err := stderr.Read(buf)
+		if n > 0 {
+			msg := strings.TrimSpace(string(buf[:n]))
+			// Filter out FFmpeg progress messages (frame=, size=, time=)
+			if !strings.Contains(msg, "frame=") && 
+			   !strings.Contains(msg, "size=") && 
+			   !strings.Contains(msg, "speed=") &&
+			   msg != "" {
+				log.Printf("[%s] %s", source, msg)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+}
+
+func getVideoDuration(url string) float64 {
+	cmd := exec.Command("yt-dlp", "--get-duration", "--no-playlist", url)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	duration, _ := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	return duration
 }
