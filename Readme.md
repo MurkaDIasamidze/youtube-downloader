@@ -102,10 +102,10 @@ npm run dev
 
 Detailed documentation is available in the `docs/` folder:
 
-- **[Installation Guide](docs/INSTALLATION.md)** - Complete setup instructions
-- **[API Documentation](docs/API.md)** - Full API reference
-- **[Configuration Guide](docs/CONFIGURATION.md)** - System configuration options
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Installation Guide](backend/docs/INSTALLATION.md)** - Complete setup instructions
+- **[API Documentation](backend/docs/API.md)** - Full API reference
+- **[Configuration Guide](backend/docs/CONFIGURATION.md)** - System configuration options
+- **[Troubleshooting](backend/docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ## ⚖️ Legal Notice
 
