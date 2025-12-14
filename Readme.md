@@ -4,15 +4,7 @@ A high-performance, full-stack media downloader application that enables users t
 
 ## 🎯 What This Project Does
 
-<<<<<<< HEAD
 Universal Downloader Pro is a web-based application that:
-=======
-- 🎥 Video & 🎵 Audio downloads from YouTube and TikTok
-- ⚙️ Multiple quality options (144p-4K, 64k-320k)
-- 📝 Format selection (MP4, WebM, MKV, MP3,Opus)
-- 📊 Download history with real-time status
-- 🔄 Direct streaming without temp files
->>>>>>> 9a7aec4f6c4a7b8b1ffd068abbd472a023834523
 
 - **Downloads media** from YouTube and TikTok platforms
 - **Converts formats** on-the-fly using FFmpeg
@@ -139,7 +131,4 @@ This project is provided as-is for educational and personal use.
 - Large files (>2GB) may timeout on slower connections
 - Some TikTok videos with special DRM may fail
 - Rate limiting may occur with excessive requests
-
-
-
 
