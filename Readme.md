@@ -1,130 +1,137 @@
 # Universal Downloader Pro
 
-Download videos and audio from YouTube and TikTok with custom quality settings.
+A high-performance, full-stack media downloader application that enables users to download videos and audio from YouTube and TikTok with customizable quality and format options.
 
-## Features
+## 🎯 What This Project Does
 
-- 🎥 Video & 🎵 Audio downloads from YouTube and TikTok
-- ⚙️ Multiple quality options (144p-4K, 64k-320k)
-- 📝 Format selection (MP4, WebM, MKV, MP3, AAC, Opus)
-- 📊 Download history with real-time status
-- 🔄 Direct streaming without temp files
+Universal Downloader Pro is a web-based application that:
 
-## Prerequisites
+- **Downloads media** from YouTube and TikTok platforms
+- **Converts formats** on-the-fly using FFmpeg
+- **Streams content** directly to users without server storage
+- **Provides quality options** for both video and audio downloads
+- **Supports multiple formats**: MP4, WebM, MKV for video; MP3, Opus, M4A for audio
+- **Tracks download history** with a beautiful, responsive UI
+- **Auto-detects platforms** from pasted URLs
 
-- Go 1.21+
-- Node.js 18+
-- PostgreSQL 12+
-- yt-dlp: `pip install yt-dlp`
-- FFmpeg: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+## 🎬 What It's For
 
-## Quick Install
+This application is designed for:
 
+- **Content creators** who need to download their own content for editing
+- **Educators** creating offline educational materials
+- **Researchers** archiving media for academic purposes
+- **Personal use** for legal media downloading and format conversion
+- **Anyone** who needs reliable, high-quality media downloads with custom settings
+
+## ✨ Key Features
+
+### Backend (Go + Fiber)
+- High-performance streaming architecture
+- Direct piping from yt-dlp to FFmpeg to client
+- No temporary file storage required
+- PostgreSQL database for download history
+- Optimized buffer management with sync.Pool
+- Concurrent fragment downloading
+- Real-time conversion and streaming
+
+### Frontend (React)
+- Modern, gradient-based UI design
+- Real-time download status updates
+- Platform auto-detection
+- Advanced settings for power users
+- Responsive design for all devices
+- Download history management
+
+## 🛠️ Technology Stack
+
+**Backend:**
+- Go (Golang)
+- Fiber web framework
+- GORM (PostgreSQL ORM)
+- yt-dlp (media downloader)
+- FFmpeg (media converter)
+
+**Frontend:**
+- React 18
+- Lucide React (icons)
+- Tailwind CSS (styling)
+- Vite (build tool)
+
+**Database:**
+- PostgreSQL
+
+## 📋 Prerequisites
+
+Before installation, ensure you have:
+
+- Go 1.21 or higher
+- Node.js 18+ and npm
+- PostgreSQL 14+
+- FFmpeg (with all codecs)
+- yt-dlp (latest version)
+
+## 🚀 Quick Start
+
+1. **Clone the repository**
 ```bash
-# 1. Clone repo
 git clone <your-repo-url>
 cd universal-downloader-pro
+```
 
-# 2. Setup PostgreSQL
-psql -U postgres -c "CREATE DATABASE postgres;"
-
-# 3. Backend setup
-go mod tidy
-# Update main.go line 49 with FFmpeg path and line 79 with DB password
+2. **Set up the backend**
+```bash
+cd backend
+go mod download
+# Configure database connection in main.go
 go run main.go
+```
 
-# 4. Frontend setup (new terminal)
+3. **Set up the frontend**
+```bash
 cd frontend
 npm install
-npm install lucide-react
-npm install -D tailwindcss postcss autoprefixer
-npx tailwindcss init -p
 npm run dev
 ```
 
-## Configuration
+4. **Access the application**
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8081
 
-**main.go** (line 79):
-```go
-dsn := "host=localhost port=5432 user=postgres password=YOUR_PASSWORD dbname=postgres sslmode=disable"
-```
+## 📚 Documentation
 
-**main.go** (line 49):
-```go
-var ffmpegPath = "C:\\ffmpeg-8.0-essentials_build\\bin" // Windows
-// var ffmpegPath = "/usr/local/bin" // macOS/Linux
-```
+Detailed documentation is available in the `docs/` folder:
 
-**tailwind.config.js**:
-```javascript
-export default {
-  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
-  theme: { extend: {} },
-  plugins: [],
-}
-```
+- **[Installation Guide](docs/INSTALLATION.md)** - Complete setup instructions
+- **[API Documentation](docs/API.md)** - Full API reference
+- **[Configuration Guide](docs/CONFIGURATION.md)** - System configuration options
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
-**src/index.css**:
-```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-```
+## ⚖️ Legal Notice
 
-## API Endpoints
+This tool is intended for downloading content that you have the right to download. Users are responsible for complying with:
 
-- `GET /api/formats` - Get available formats
-- `POST /api/download` - Create download job
-- `GET /api/downloads` - List all downloads
-- `GET /api/downloads/{id}` - Get specific download
-- `GET /api/stream/{id}` - Stream/download file
+- YouTube's Terms of Service
+- TikTok's Terms of Service
+- Copyright laws in their jurisdiction
+- Content creator rights
 
-## Usage
+**Use responsibly and legally.**
 
-1. Open `http://localhost:5173`
-2. Paste YouTube or TikTok URL
-3. Select format (Video/Audio)
-4. Click "Start Download"
-5. Download from history when ready
+## 🤝 Contributing
 
-## Project Structure
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-```
-├── main.go              # Backend server
-├── go.mod              # Go dependencies
-├── tests/
-│   └── main_test.go    # Unit tests
-└── frontend/
-    ├── src/
-    │   ├── App.jsx     # React component
-    │   ├── main.jsx
-    │   └── index.css
-    ├── package.json
-    ├── vite.config.js
-    └── tailwind.config.js
-```
+## 📄 License
 
-## Troubleshooting
+This project is provided as-is for educational and personal use.
 
-**Database error**: Check PostgreSQL is running and credentials are correct
+## 🐛 Known Issues
 
-**yt-dlp not found**: Install with `pip install yt-dlp` and add to PATH
+- Large files (>2GB) may timeout on slower connections
+- Some TikTok videos with special DRM may fail
+- Rate limiting may occur with excessive requests
 
-**FFmpeg error**: Update `ffmpegPath` in main.go with correct installation path
 
-**CORS error**: Ensure backend runs on :8080, frontend on :5173
 
-**Download fails**: Update yt-dlp: `pip install -U yt-dlp`
 
-## Tech Stack
-
-**Backend**: Go, Gorilla Mux, GORM, PostgreSQL, yt-dlp, FFmpeg  
-**Frontend**: React, Vite, Tailwind CSS, Lucide Icons
-
-## License
-
-MIT License - For educational and personal use only. Respect copyright laws.
-
-## Note
-
-This application is for personal use. Always respect platform terms of service and copyright laws when downloading content.

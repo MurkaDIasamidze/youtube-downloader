@@ -108,7 +108,7 @@ func main() {
 	app.Get("/api/downloads/:id", handleGetDownload)
 	app.Get("/api/stream/:id", handleStreamFile)
 
-	port := ":8080" // Changed from 8080
+	port := ":8081" // Changed from 8080
 	log.Printf("Server starting on %s", port)
 	log.Println("Available routes:")
 	log.Println("  GET  /")
